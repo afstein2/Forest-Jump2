@@ -1,0 +1,106 @@
+{
+    "expandedProjectPaths": [
+        "."
+    ],
+    "fileStates": {
+        "": {
+            "scaleInDock": 0.33,
+            "scaleInEditor": 1
+        },
+        "#foliagePack_default": {
+            "dynamicWrapping": true
+        },
+        "#foliagePack_vector": {
+            "dynamicWrapping": false
+        },
+        "/home/deck/repos/CMPM120/Forest-Jump/tiled-bak/ForestJump.tmj": {
+            "scale": 0.49655092592592587,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 1080.4531257284043,
+                "y": -258.78513822199443
+            }
+        },
+        "/home/deck/repos/CMPM120/Forest-Jump/tiled-bak/ForestJump.tmj#tilemap_packed": {
+            "scaleInDock": 1
+        },
+        "/home/deck/repos/CMPM120/Forest-Jump/tiled-bak/Treesbackground.tmj": {
+            "scale": 0.25,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 1562,
+                "y": 738
+            }
+        },
+        "/home/deck/repos/CMPM120/Forest-Jump/tiled-bak/Treesbackground.tmj#foliagePack_vector": {
+            "dynamicWrapping": false,
+            "scaleInDock": 0.75,
+            "scaleInEditor": 0.33
+        },
+        "/home/deck/repos/CMPM120/Mappy/assets/tilemap01.tmx": {
+            "scale": 1.1993749999999999,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 360.18759770713916,
+                "y": 239.70818134445025
+            }
+        },
+        "/home/deck/repos/CMPM120/Mappy/assets/tilemap01.tmx#kenney_colored_packed": {
+            "scaleInDock": 1
+        },
+        "/home/deck/repos/CMPM120/Mappy/assets/tilemap02.tmx": {
+            "expandedObjectLayers": [
+                4
+            ],
+            "scale": 2,
+            "selectedLayer": 3,
+            "viewCenter": {
+                "x": 234.25,
+                "y": 241.75
+            }
+        },
+        "/home/deck/repos/CMPM120/Mappy/assets/tilemap02.tmx#colored_packed": {
+            "scaleInDock": 1
+        },
+        "/home/deck/repos/CMPM120/Mappy/assets/tilemap04.tmx": {
+            "scale": 2,
+            "selectedLayer": 1,
+            "viewCenter": {
+                "x": 193.25,
+                "y": 197.75
+            }
+        },
+        "/home/deck/repos/CMPM120/Mappy/assets/tilemap04.tmx#colored_packed": {
+            "scaleInDock": 1
+        },
+        "platformer-level-1.tmj": {
+            "expandedObjectLayers": [
+                10
+            ],
+            "scale": 0.75,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 1194,
+                "y": 511.3333333333333
+            }
+        },
+        "platformer-level-1.tmj#foliagePack_vector": {
+            "scaleInDock": 0.33,
+            "scaleInEditor": 1
+        },
+        "platformer-level-1.tmj#kenny_tilemap_packed": {
+            "scaleInDock": 1
+        }
+    },
+    "openFiles": [
+        "platformer-level-1.tmj"
+    ],
+    "recentFiles": [
+        "platformer-level-1.tmj",
+        "/home/deck/repos/CMPM120/Mappy/assets/tilemap02.tmx",
+        "/home/deck/repos/CMPM120/Mappy/assets/tilemap01.tmx",
+        "/home/deck/repos/CMPM120/Mappy/assets/tilemap04.tmx",
+        "/home/deck/repos/CMPM120/Forest-Jump/tiled-bak/Treesbackground.tmj",
+        "/home/deck/repos/CMPM120/Forest-Jump/tiled-bak/ForestJump.tmj"
+    ]
+}
