@@ -1,534 +1,516 @@
 /**
- * Allie Stein
- * 
- * Platformer implementation - Game 3b 
- * 
- * Forest Jump
- * 
+ * Platformer.js — Base gameplay scene for all platforming levels.
+ *
+ * This class contains the complete game loop: tilemap rendering, player
+ * physics, object collision, water zones, camera, VFX, audio, HUD, and
+ * pause / restart handling.
+ *
+ * Level-specific subclasses (Level1, Level2) override the template methods:
+ *   - setupMap()        → which tilemap and tileset to load
+ *   - setupObjects()    → Tiled object → physics group mappings
+ *   - setupVFX()        → per-level VFX emitter configurations
+ *   - setupWaterZones() → water zone positions for this level
+ *   - onLevelComplete() → what happens when the player reaches the flag
+ *
+ * Keeping per-level data in subclasses keeps create() and update() clean.
  */
-
 class Platformer extends Phaser.Scene {
-
-    init() {
-
-        // variables and settings
-        this.ACCELERATION = 400;
-        this.DRAG = 500;    // DRAG < ACCELERATION = icy slide
-        this.physics.world.gravity.y = 1500;
-        this.JUMP_VELOCITY = -700;
-        this.inWater = false;
-
-        // particles
-        this.PARTICLE_VELOCITY = 50;
-
-        // world scaling
-        this.SCALE = 1.5;
+    constructor(sceneKey) {
+        super(sceneKey);
     }
 
+    // ── CREATE ────────────────────────────────────────────────────
     create() {
-        this.setupPhysics();
-        this.setupUI();
+        // Reset world gravity to normal at the start of every level
+        this.physics.world.gravity.y = NORMAL_GRAVITY;
+        this.physics.world.TILE_BIAS = TILE_BIAS;
+
+        // Defer to subclass for level-specific map, objects, and water
         this.setupMap();
-
-        this.clouds = this.add.tileSprite(
-            0,
-            -this.scale.height * 0.5,
-            this.scale.width,
-            this.scale.height * 0.89,
-            'clouds'
-        )
-        .setOrigin(0, 0)
-        .setScrollFactor(0)
-        .setScale(1);
-
-        this.clouds.tileScaleX = 0.4;
-        this.clouds.tileScaleY = 0.4;
-
-        // Print Screen Size
-        console.log("Scale width:", this.scale.width, "Scale height:", this.scale.height);
-        console.log("Game size width:", this.scale.gameSize.width, "Game size height:", this.scale.gameSize.height);
-        console.log("Camera width:", this.cameras.main.width, "Camera height:", this.cameras.main.height);
-        console.log("Window width:", window.innerWidth, "Window height:", window.innerHeight);
-
         this.setupObjects();
-        this.setupPlayer();   // player created here, AFTER setupObjects
-        this.setupInput();
+        this.setupWaterZones();
+
+        // Player must exist before VFX setup (emitters follow the player sprite)
+        this._createPlayer();
+
+        // Now VFX can reference my.sprite
         this.setupVFX();
-        this.setupAudio();
-        this.setupCamera();
-    }
+        this._setupCollisions();
+        this._setupCamera();
+        this._setupClouds();
+        this._setupHUD();
+        this._setupInput();
 
-    setupPhysics() {
-
-        // Fix Collison clipping
-        this.physics.world.TILE_BIAS = 32;
-    }
-
-
-    // Subclasses override this to load their own map
-    setupMap() {}
-
-
-    // UI  -----------------------------------------------
-
-    setupUI() {
-
-        
-        /* ==================================================
-        * Coin Score
-        * ================================================= */
-        if (my.score) {
-            this.score = my.score;
+        // Score: either start fresh or carry over from the previous level
+        if (my.scoreCarryOver) {
+            my.score = my.savedScore;
+            my.scoreCarryOver = false;
         } else {
-            this.score = my.savedScore;
+            my.score = 0;
         }
+        my.savedScore = my.score;
 
-        my.scoreCarryOver = false;
-        my.score = this.score;
+        // Track whether the player is currently in a water zone
+        this._inWater = false;
 
+        // Remember which level scene is active (used by PauseMenu)
+        my.activeLevelKey = this.scene.key;
 
-        
-        /* ==================================================
-        * UI Text
-        * ================================================= */
-        this.scoreText = this.add.text(game.config.width / 5.2, game.config.height / 5.5, `${this.score}`, {
-            fontSize: '128px', fill: '#ffffff'
-        }).setScrollFactor(0).setDepth(100).setScale(0.5);
+        // Throttle footstep sounds to one every 250 ms
+        this._lastFootstepTime = 0;
 
-        this.coinIcon = this.add.image(game.config.width / 5.5, game.config.height / 4.7, "coin_icon");
-        this.coinIcon.setScrollFactor(0).setScale(3).setDepth(1000);
-
-        if (my.settings.fps) {
-            this.fpsText = this.add.text(game.config.width / 1.3, game.config.height / 5.5, '', {
-                fontSize: '48px',
-                fill: '#ffffff'
-            }).setScrollFactor(0).setDepth(200).setScale(0.5);
-        }
+        // Prevent multiple death/restart triggers in the same frame
+        this._dying = false;
     }
 
+    // ── UPDATE ────────────────────────────────────────────────────
+    update() {
+        this._handleMovement();
+        this._handleJump();
+        this._handleAnimations();
+        this._handleFootsteps();
+        this._updateClouds();
+        this._updateHUD();
+        this._checkOutOfBounds();
+        this._updateVFX();
+    }
 
-    // OBJECTS  -----------------------------------------------
+    // ──────────────────────────────────────────────────────────────
+    //  Template methods — subclasses MUST override these
+    // ──────────────────────────────────────────────────────────────
 
+    /** Load the tilemap, add the tileset image, render the ground layer. */
+    setupMap() {
+        // Subclass responsibility
+    }
+
+    /** Create physics groups from Tiled object layer (coins, spikes, flags). */
     setupObjects() {
-
-        // Defaults - subclasses populate via setupWaterZones()
-        this.waterZone = null;
-        this.waterBarriers = [];
-
-
-
-        /* ==================================================
-        * Create Objects
-        * ================================================= */
-
-        // Coins ------------------------------------------------
-        this.coins = this.map.createFromObjects("Objects", {
-            name: "coin", key: "tilemap_sheet", frame: 151
-        });
-        this.coins.forEach((coin) => {
-            coin.setScale(this.SCALE);
-            coin.x *= this.SCALE;
-            coin.y *= this.SCALE;
-        });
-        this.physics.world.enable(this.coins, Phaser.Physics.Arcade.STATIC_BODY);
-        this.coinGroup = this.add.group(this.coins);
-
-        // Flags ------------------------------------------------
-        this.flags = this.map.createFromObjects("Objects", {
-            name: "flag", key: "tilemap_sheet", frame: 111
-        });
-        this.flags.forEach((flag) => {
-            flag.setScale(this.SCALE);
-            flag.x *= this.SCALE;
-            flag.y *= this.SCALE;
-        });
-        this.physics.world.enable(this.flags, Phaser.Physics.Arcade.STATIC_BODY);
-        this.flagGroup = this.add.group(this.flags);
-
-        // Spikes ------------------------------------------------
-        this.spikes = this.map.createFromObjects("Objects", {
-            name: "spike", key: "tilemap_sheet", frame: 68
-        });
-        this.spikes.forEach((spike) => {
-            spike.setScale(this.SCALE);
-            spike.x *= this.SCALE;
-            spike.y *= this.SCALE;
-        });
-        this.physics.world.enable(this.spikes, Phaser.Physics.Arcade.STATIC_BODY);
-        this.spikeGroup = this.add.group(this.spikes);
+        // Subclass responsibility
     }
 
-
-
-    /* ==================================================
-    * Create Water Zones
-    * ================================================= */
-    // Called by subclasses inside their setupObjects()
-    // Barriers are stored and wired to the player later in setupPlayer()
-    setupWaterZones(configs) {
-
-        const zoneObjects = configs.map(cfg => {
-
-            const barrier = this.add.zone(cfg.x, cfg.barrierY, cfg.width, 10);
-            this.physics.world.enable(barrier);
-            barrier.body.setAllowGravity(false);
-            barrier.body.setImmovable(true);
-            barrier.body.moves = false;
-            this.waterBarriers.push(barrier); // collider added later in setupPlayer
-
-            const zone = this.add.zone(cfg.x, cfg.zoneY, cfg.width, cfg.height);
-            this.physics.world.enable(zone);
-            zone.body.setAllowGravity(false);
-            zone.body.setImmovable(true);
-            zone.body.moves = false;
-
-            return zone;
-        });
-
-        if (zoneObjects.length === 1) {
-            this.waterZone = zoneObjects[0];
-        } 
-        
-        else {
-            this.waterZone = this.add.group(zoneObjects);
-        }
+    /** Set up water zones for this level (barriers + overlap zones). */
+    setupWaterZones() {
+        // Subclass responsibility
     }
 
-
-    // PLAYER  ---------------------------------------------------------
-
-    setupPlayer() {
-
-        /* ==================================================
-        * Create Player
-        * ================================================= */
-        my.sprite.player = this.physics.add.sprite(
-            this.playerStart.x,
-            this.playerStart.y,
-            "platformer_characters",
-            "tile_0000.png"
-        );
-        my.sprite.player.setScale(this.SCALE);         // Player Scale
-        my.sprite.player.setCollideWorldBounds(false); // Player World bounds
-
-
-
-        /* ==================================================
-        * Fixed Colliders/Barriers
-        * ================================================= */
-
-        // Ground Collison 
-        this.physics.add.collider(my.sprite.player, this.groundLayer);
-
-        // Water barrier colliders - now safe because player exists
-        this.waterBarriers.forEach(barrier => {
-            this.physics.add.collider(my.sprite.player, barrier);
-        });
-
-
-
-        /* ==================================================
-        * Collidable Objects
-        * ================================================= */
-
-        // Coin overlap
-        this.physics.add.overlap(my.sprite.player, this.coinGroup, (obj1, obj2) => {
-            this.score += 1;
-            my.score = this.score;
-            this.scoreText.setText(`${this.score}`);
-            obj2.destroy();
-            this.playCoin();
-        });
-
-        // Flag overlap
-        this.physics.add.overlap(my.sprite.player, this.flagGroup, () => {
-            my.savedScore = this.score;
-            this.onLevelComplete();
-        });
-
-        // Spike overlap
-        this.physics.add.overlap(my.sprite.player, this.spikeGroup, () => {
-            this.scene.restart();
-            my.score = this.savedScore;
-            this.playDeath();
-        });
-
-
-    }
-
-
-    // OVERRIDE
-    onLevelComplete() {}
-
-
-    // INPUT ---------------------------------------------------------
-
-    setupInput() {
-        cursors = this.input.keyboard.createCursorKeys();
-        this.rKey = this.input.keyboard.addKey('R');
-        this.pKey = this.input.keyboard.addKey('P');
-        this.aKey = this.input.keyboard.addKey('A');
-        this.dKey = this.input.keyboard.addKey('D');
-
-        this.input.keyboard.on('keydown-O', () => {
-            this.physics.world.drawDebug = !this.physics.world.drawDebug;
-            this.physics.world.debugGraphic.clear();
-        }, this);
-    }
-
-
-    // VFX/Particles ---------------------------------------------------------
-
+    /** Configure particle emitters (dust, bubbles) with level-specific values. */
     setupVFX() {
-
-    /* ==================================================
-    * Create Walking Particles 
-    * ================================================= */
-        my.vfx.walking = this.add.particles(0, 0, "kenny-particles", {
-            frame: ['smoke_03.png', 'smoke_09.png'],
-            random: true,
-            scale: { start: 0.03, end: 0.1 },
-            maxAliveParticles: 8,
-            lifespan: 350,
-            gravityY: -400,
-            alpha: { start: 1, end: 0.1 },
-        });
-        my.vfx.walking.stop();
-
-
-    /* ==================================================
-    * Create Bubble Particles (Overrides)
-    * ================================================= */
-        // Placeholder water emitter - subclasses destroy and replace this
-        my.vfx.water = this.add.particles(0, 0, "kenny-particles", {
-            frame: "bubble_01.png",
-        });
+        // Subclass responsibility
     }
 
-    /* ==================================================
-    * Create Bubble Particles
-    * ================================================= */
-    createBubbleEmitter(xMin, xMax) {
-        return this.add.particles(0, 0, "kenny-particles", {
-            frame: "bubble_01.png",
-            x: { min: xMin, max: xMax },
-            y: { min: 1200, max: 900 },
-            lifespan: 1200,
-            speedY: { min: -80, max: -40 },
-            speedX: { min: -10, max: 10 },
-            scale: { start: 0.08, end: 0 },
-            alpha: { start: 0.8, end: 0 },
-            quantity: 1,
-            frequency: 120,
-            blendMode: 'ADD',
-            emitting: false
-        });
+    /** Called when the player reaches the flag. */
+    onLevelComplete() {
+        // Subclass responsibility
     }
 
+    // ──────────────────────────────────────────────────────────────
+    //  Player creation
+    // ──────────────────────────────────────────────────────────────
 
-    /* ==================================================
-    *  Start/Stop Water VFX
-    * ================================================= */
-    startWaterVFX() {
-        if (Array.isArray(my.vfx.water)) {
-            my.vfx.water.forEach(emitter => emitter.start());
-        } else {
-            my.vfx.water.start();
+    _createPlayer() {
+        // Spawn near the left side of the level, just above the ground
+        const spawnX = this.scale.width / 4;
+        const spawnY = 930;
+
+        my.sprite = this.physics.add.sprite(spawnX, spawnY, 'platformer_characters', 'tile_0000.png');
+        my.sprite.setScale(SCALE);
+        my.sprite.setCollideWorldBounds(false); // We handle OOB manually
+        my.sprite.setDragX(DRAG);
+        my.sprite.setDepth(1);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    //  Collisions & overlaps
+    // ──────────────────────────────────────────────────────────────
+
+    _setupCollisions() {
+        // Player collides with the solid ground tile layer
+        this.physics.add.collider(my.sprite, this.groundLayer);
+
+        // Player collides with water zone barriers (invisible solid platforms)
+        if (this.waterBarriers) {
+            this.waterBarriers.forEach((b) => {
+                this.physics.add.collider(my.sprite, b);
+            });
+        }
+
+        // Coins: overlap → collect
+        if (this.coins) {
+            this.physics.add.overlap(my.sprite, this.coins, this._collectCoin, null, this);
+        }
+
+        // Spikes: overlap → die
+        if (this.spikes) {
+            this.physics.add.overlap(my.sprite, this.spikes, this._hitSpike, null, this);
+        }
+
+        // Flag: overlap → level complete
+        if (this.flags) {
+            this.physics.add.overlap(my.sprite, this.flags, this._reachFlag, null, this);
+        }
+
+        // Water zones: overlap → gravity change
+        if (this.waterZones) {
+            this.waterZones.forEach((z) => {
+                this.physics.add.overlap(my.sprite, z, this._enterWater, null, this);
+            });
         }
     }
 
-    stopWaterVFX() {
-        if (Array.isArray(my.vfx.water)) {
-            my.vfx.water.forEach(emitter => emitter.stop());
+    // ──────────────────────────────────────────────────────────────
+    //  Camera
+    // ──────────────────────────────────────────────────────────────
+
+    _setupCamera() {
+        const cam = this.cameras.main;
+        cam.setBounds(0, 0, this.map.widthInPixels * SCALE, this.map.heightInPixels * SCALE);
+        cam.setZoom(SCALE);
+        cam.startFollow(my.sprite, true, 0.25, 0.25);
+        cam.setDeadzone(50, 50);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    //  Parallax cloud background
+    // ──────────────────────────────────────────────────────────────
+
+    _setupClouds() {
+        this.clouds = this.add.tileSprite(
+            0, -this.scale.height * 0.5,
+            this.scale.width, this.scale.height * 0.89,
+            'clouds'
+        );
+        this.clouds.setOrigin(0);
+        this.clouds.setScale(0.4);
+        this.clouds.setScrollFactor(0); // Fixed on screen
+        this.clouds.setDepth(0);
+    }
+
+    _updateClouds() {
+        // Scroll clouds at 10 % of camera speed for a parallax feel
+        this.clouds.tilePositionX = this.cameras.main.scrollX * 0.1;
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    //  HUD (score, coin icon, optional FPS)
+    // ──────────────────────────────────────────────────────────────
+
+    _setupHUD() {
+        const w = this.scale.width;
+        const h = this.scale.height;
+
+        // Score text
+        this.scoreText = this.add.text(w / 5.2, h / 5.5, '0', {
+            fontFamily: 'Arial',
+            fontSize: '128px',
+            color: '#ffffff',
+        }).setOrigin(0.5).setScale(0.5).setScrollFactor(0).setDepth(100);
+
+        // Coin icon next to score
+        this.add.image(w / 5.5, h / 4.7, 'coin_icon')
+            .setScale(3)
+            .setScrollFactor(0)
+            .setDepth(1000);
+
+        // FPS counter (hidden by default, toggled in Settings)
+        this.fpsText = this.add.text(w / 1.3, h / 5.5, 'FPS: 60', {
+            fontFamily: 'Arial',
+            fontSize: '48px',
+            color: '#ffffff',
+        }).setOrigin(0.5).setScale(0.5).setScrollFactor(0).setDepth(200);
+        this.fpsText.setVisible(my.settings.showFPS);
+    }
+
+    _updateHUD() {
+        this.scoreText.setText(my.score);
+        if (my.settings.showFPS) {
+            this.fpsText.setVisible(true);
+            this.fpsText.setText('FPS: ' + Math.round(this.game.loop.actualFps));
         } else {
-            my.vfx.water.stop();
+            this.fpsText.setVisible(false);
         }
     }
 
+    // ──────────────────────────────────────────────────────────────
+    //  Input
+    // ──────────────────────────────────────────────────────────────
 
-    // AUDIO ---------------------------------------------------------
+    _setupInput() {
+        cursors = this.input.keyboard.createCursorKeys();
 
+        // WASD also moves the player
+        this.wasd = this.input.keyboard.addKeys({
+            left: Phaser.Input.Keyboard.KeyCodes.A,
+            right: Phaser.Input.Keyboard.KeyCodes.D,
+            up: Phaser.Input.Keyboard.KeyCodes.W,
+        });
 
-    /* ==================================================
-    * Create Audio 
-    * ================================================= */
-    setupAudio() {
+        // Space bar as an additional jump key
+        this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
-        this.sound.add('jump');
-        this.sound.add('coin');
-        this.sound.add('death');
+        // Pause toggle
+        this.input.keyboard.on('keydown-P', () => {
+            this.scene.launch('pauseScene');
+            this.scene.pause();
+        });
 
-        this.walkSounds = [
-            this.sound.add('walk1', { volume: 0.4 }),
-            this.sound.add('walk2', { volume: 0.4 }),
-            this.sound.add('walk3', { volume: 0.4 }),
-            this.sound.add('walk4', { volume: 0.4 })
-        ];
+        // Quick restart
+        this.input.keyboard.on('keydown-R', () => {
+            my.score = my.savedScore;
+            this.scene.restart();
+        });
 
-        this.waterSounds = [
-            this.sound.add('water1', { volume: 0.4 }),
-            this.sound.add('water2', { volume: 0.4 }),
-            this.sound.add('water3', { volume: 0.4 }),
-            this.sound.add('water4', { volume: 0.4 })
-        ];
-
-        this.lastStepTime = 0;
-        this.stepDelay = 250;
+        // Toggle physics debug overlay
+        this.input.keyboard.on('keydown-O', () => {
+            const world = this.physics.world;
+            if (!world.debugGraphic) {
+                world.createDebugGraphic();
+            }
+            world.drawDebug = !world.drawDebug;
+            world.debugGraphic.setVisible(world.drawDebug);
+        });
     }
 
-    /* ==================================================
-    * Play Audio 
-    * ================================================= */
-    playFootstep() {
-        Phaser.Utils.Array.GetRandom(this.walkSounds).play();
+    // ──────────────────────────────────────────────────────────────
+    //  Movement & jumping
+    // ──────────────────────────────────────────────────────────────
+
+    _handleMovement() {
+        const left = cursors.left.isDown || this.wasd.left.isDown;
+        const right = cursors.right.isDown || this.wasd.right.isDown;
+
+        if (left) {
+            my.sprite.setAccelerationX(-ACCELERATION);
+            my.sprite.setFlipX(false);
+            my.sprite.body.setDragX(0); // No drag while accelerating
+        } else if (right) {
+            my.sprite.setAccelerationX(ACCELERATION);
+            my.sprite.setFlipX(true);
+            my.sprite.body.setDragX(0);
+        } else {
+            // No directional key: apply drag for a snappy stop
+            my.sprite.setAccelerationX(0);
+            my.sprite.setDragX(DRAG);
+        }
     }
 
-    playJump() {
-        this.sound.play('jump');
+    _handleJump() {
+        // Jump on single press (JustDown), only when grounded
+        const jumpPressed = Phaser.Input.Keyboard.JustDown(cursors.up) ||
+                            Phaser.Input.Keyboard.JustDown(this.wasd.up) ||
+                            Phaser.Input.Keyboard.JustDown(this.spaceKey);
+
+        if (jumpPressed && my.sprite.body.blocked.down) {
+            my.sprite.setVelocityY(JUMP_VELOCITY);
+            this.sound.play('jump');
+        }
     }
 
-    playCoin() {
+    // ──────────────────────────────────────────────────────────────
+    //  Animations
+    // ──────────────────────────────────────────────────────────────
+
+    _handleAnimations() {
+        const isGrounded = my.sprite.body.blocked.down;
+        const isMoving = Math.abs(my.sprite.body.velocity.x) > 10;
+
+        if (!isGrounded) {
+            my.sprite.anims.play('jump', true);
+        } else if (isMoving) {
+            my.sprite.anims.play('walk', true);
+        } else {
+            my.sprite.anims.play('idle', true);
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    //  Footstep audio (throttled to 250 ms between steps)
+    // ──────────────────────────────────────────────────────────────
+
+    _handleFootsteps() {
+        const now = this.time.now;
+        const isGrounded = my.sprite.body.blocked.down;
+        const isMoving = Math.abs(my.sprite.body.velocity.x) > 10;
+
+        if (isGrounded && isMoving && now - this._lastFootstepTime > 250) {
+            const key = Phaser.Utils.Array.GetRandom(my.walkSounds);
+            this.sound.play(key, { volume: 0.4 });
+            this._lastFootstepTime = now;
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    //  Object interactions
+    // ──────────────────────────────────────────────────────────────
+
+    _collectCoin(player, coin) {
+        if (!coin.active) return; // Already collected this frame
+        coin.setActive(false);
+        this.time.delayedCall(0, () => {
+            coin.destroy();
+        });
+        my.score += 1;
         this.sound.play('coin');
     }
 
-    playDeath() {
-        this.sound.play('death');
-    }
-
-    playWater() {
-        Phaser.Utils.Array.GetRandom(this.waterSounds).play();
-    }
-
-
-    // CAMERA ---------------------------------------------------------
-
-    /* ==================================================
-    * Create Camera
-    * ================================================= */
-    setupCamera() {
-        this.cameras.main.startFollow(my.sprite.player, true, 0.25, 0.25);
-        this.cameras.main.setBounds(0, 0, this.map.widthInPixels * this.SCALE, this.map.heightInPixels * this.SCALE);
-        this.physics.world.setBounds(0, 0, this.map.widthInPixels * this.SCALE, this.map.heightInPixels * this.SCALE);
-        this.cameras.main.setDeadzone(50, 50);
-        this.cameras.main.setZoom(this.SCALE);
-    }
-
-
-    update() {
-
-
-
-        /* ==================================================
-        * World Bounds
-        * ================================================= */
-        // If out of bounds, kill player
-        if (my.sprite.player.y > this.physics.world.bounds.height + 200) {
-            my.score = this.savedScore;
-            this.playDeath();
+    _hitSpike(player, spike) {
+        if (this._dying) return; // Already dying this frame
+        this._dying = true;
+        this.time.delayedCall(0, () => {
+            this.sound.play('death');
+            my.score = my.savedScore;
             this.scene.restart();
+        });
+    }
+
+    _reachFlag(player, flag) {
+        // Save score, then let the subclass decide what happens next
+        my.savedScore = my.score;
+        my.scoreCarryOver = true;
+        this.onLevelComplete();
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    //  Water zones
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Helper for subclasses: creates a water zone with an invisible
+     * solid barrier at the surface and an overlap zone below it.
+     *
+     * @param {number} x         - Center X (pre-scale)
+     * @param {number} barrierY  - Y position of the solid barrier (pre-scale)
+     * @param {number} zoneY     - Y position of the overlap zone (pre-scale)
+     * @param {number} width     - Horizontal extent (pre-scale)
+     * @param {number} height    - Vertical extent of overlap zone (pre-scale)
+     */
+    addWaterZone(x, barrierY, zoneY, width, height) {
+        if (!this.waterBarriers) {
+            this.waterBarriers = [];
+            this.waterZones = [];
         }
 
+        const s = SCALE;
 
-        /* ==================================================
-        * Water Updates
-        * ================================================= */
+        // Solid invisible barrier that the player stands on at the water surface.
+        // physics.add.existing(rect, true) gives it a static body.
+        const barrierRect = this.add.rectangle(
+            x * s + (width * s) / 2,
+            barrierY * s,
+            width * s, 10,
+            0x000000, 0
+        );
+        this.physics.add.existing(barrierRect, true);
+        barrierRect.setVisible(false);
 
-        // Water check
-        let touchingWater = false;
+        // Overlap zone below the barrier for detecting "in water" state.
+        const zoneRect = this.add.rectangle(
+            x * s + (width * s) / 2,
+            zoneY * s + (height * s) / 2,
+            width * s, height * s,
+            0x000000, 0
+        );
+        this.physics.add.existing(zoneRect, true);
+        zoneRect.setVisible(false);
 
-        if (this.waterZone) {
-            touchingWater = this.physics.overlap(my.sprite.player, this.waterZone);
+        this.waterBarriers.push(barrierRect);
+        this.waterZones.push(zoneRect);
+    }
+
+    _enterWater(player, zone) {
+        if (!this._inWater) {
+            // First frame of water entry: reduce gravity, play splash
+            this._inWater = true;
+            this.physics.world.gravity.y = WATER_GRAVITY;
+            const key = Phaser.Utils.Array.GetRandom(my.waterSounds);
+            this.sound.play(key, { volume: 0.4 });
+            if (my.vfx.bubbleEmitter) {
+                my.vfx.bubbleEmitter.start();
+            }
         }
+    }
 
-        if (!touchingWater) {
-            this.stopWaterVFX();
-        }
-
-        // Enter water
-        if (touchingWater && !this.inWater) {
-            this.inWater = true;
-            this.playWater();
-            this.startWaterVFX();
-            this.physics.world.gravity.y = 400;
-        }
-        // Exit water
-        else if (!touchingWater && this.inWater) {
-            this.inWater = false;
-            this.stopWaterVFX();
-            this.physics.world.gravity.y = 1500;
-        }
-
-
-
-
-        /* ==================================================
-        * UI/Cloud Updates
-        * ================================================= */
-        this.clouds.tilePositionX = this.cameras.main.scrollX * 0.1;
-
-        if (my.settings.fps && this.fpsText) {
-            this.fpsText.setText(`FPS: ${Math.floor(this.game.loop.actualFps)}`);
-        }
-
-        if (Phaser.Input.Keyboard.JustDown(this.pKey)) {
-            this.scene.pause();
-            this.scene.launch('pauseScene');
-        }
-
-        /* ==================================================
-        * Player Movement Updates
-        * ================================================= */
-        if (this.aKey.isDown || cursors.left.isDown) {
-            my.sprite.player.setAccelerationX(-this.ACCELERATION);
-            my.sprite.player.resetFlip();
-            my.sprite.player.anims.play('walk', true);
-            my.vfx.walking.startFollow(my.sprite.player, my.sprite.player.displayWidth / 2 - 10, my.sprite.player.displayHeight / 2 - 5, false);
-            my.vfx.walking.setParticleSpeed(this.PARTICLE_VELOCITY, 0);
-
-            if (my.sprite.player.body.blocked.down) {
-                my.vfx.walking.start();
-                if (this.time.now > this.lastStepTime + this.stepDelay) {
-                    this.playFootstep();
-                    this.lastStepTime = this.time.now;
+    _updateVFX() {
+        // Check if the player has left the water zone
+        if (this._inWater && this.waterZones) {
+            let anyOverlap = false;
+            for (const z of this.waterZones) {
+                if (this.physics.world.overlap(my.sprite, z)) {
+                    anyOverlap = true;
+                    break;
                 }
             }
-
-        } else if (this.dKey.isDown || cursors.right.isDown) {
-            my.sprite.player.setAccelerationX(this.ACCELERATION);
-            my.sprite.player.setFlip(true, false);
-            my.sprite.player.anims.play('walk', true);
-            my.vfx.walking.startFollow(my.sprite.player, my.sprite.player.displayWidth / 2 - 10, my.sprite.player.displayHeight / 2 - 5, false);
-            my.vfx.walking.setParticleSpeed(this.PARTICLE_VELOCITY, 0);
-
-            if (my.sprite.player.body.blocked.down) {
-                my.vfx.walking.start();
-                if (this.time.now > this.lastStepTime + this.stepDelay) {
-                    this.playFootstep();
-                    this.lastStepTime = this.time.now;
+            if (!anyOverlap) {
+                this._inWater = false;
+                this.physics.world.gravity.y = NORMAL_GRAVITY;
+                if (my.vfx.bubbleEmitter) {
+                    my.vfx.bubbleEmitter.stop();
                 }
             }
-
-        } else {
-            my.sprite.player.setAccelerationX(0);
-            my.sprite.player.setDragX(this.DRAG);
-            my.sprite.player.anims.play('idle');
-            my.vfx.walking.stop();
         }
 
-        if (!my.sprite.player.body.blocked.down) {
-            my.sprite.player.anims.play('jump');
+        // Dust particles: emit only when grounded and moving
+        if (my.vfx.dustEmitter) {
+            const isGrounded = my.sprite.body.blocked.down;
+            const isMoving = Math.abs(my.sprite.body.velocity.x) > 10;
+            if (isGrounded && isMoving) {
+                my.vfx.dustEmitter.start();
+            } else {
+                my.vfx.dustEmitter.stop();
+            }
         }
+    }
 
-        if (my.sprite.player.body.blocked.down &&
-            (Phaser.Input.Keyboard.JustDown(cursors.space) || Phaser.Input.Keyboard.JustDown(cursors.up))) {
-            my.sprite.player.body.setVelocityY(this.JUMP_VELOCITY);
-            this.playJump();
-        }
+    // ──────────────────────────────────────────────────────────────
+    //  Out-of-bounds death
+    // ──────────────────────────────────────────────────────────────
 
-        // Restart Level
-        if (Phaser.Input.Keyboard.JustDown(this.rKey)) {
-            my.score = this.savedScore;
-            this.scene.restart();
+    _checkOutOfBounds() {
+        const worldBottom = this.physics.world.bounds.height + 200;
+        if (my.sprite.y > worldBottom && !this._dying) {
+            this._dying = true;
+            this.time.delayedCall(0, () => {
+                this.sound.play('death');
+                my.score = my.savedScore;
+                this.scene.restart();
+            });
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    //  Shared helper: create physics groups from Tiled object layer
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Reads named objects from the Tiled "Objects" layer and converts them
+     * into a static physics group of sprites using the tilemap spritesheet.
+     *
+     * @param {string} objectName - The Tiled object `name` to match.
+     * @param {number} frame      - 0-indexed frame in `tilemap_sheet`.
+     * @returns {Phaser.Physics.Arcade.StaticGroup}
+     */
+    createObjectGroup(objectName, frame) {
+        const group = this.map.createFromObjects('Objects', {
+            name: objectName,
+            key: 'tilemap_sheet',
+            frame: frame,
+        });
+
+        // Scale positions and sprite display for the global SCALE factor
+        group.forEach((obj) => {
+            obj.x *= SCALE;
+            obj.y *= SCALE;
+            obj.setScale(SCALE);
+        });
+
+        // Convert to a static physics group (bodies auto-sized to sprite bounds)
+        const physicsGroup = this.physics.add.staticGroup(group);
+
+        // Refresh each body so the physics size matches the scaled display size
+        physicsGroup.getChildren().forEach((child) => {
+            child.body.updateFromGameObject();
+        });
+
+        return physicsGroup;
     }
 }

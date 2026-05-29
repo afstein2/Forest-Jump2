@@ -5,19 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Forest Jump</title>
     <script src="./lib/phaser.js"></script>
-    <script src="./src/Scenes/StartScreen.js"></script>
+    <!-- Global utilities must load before scenes that reference them -->
+    <script src="./src/globals.js"></script>
+    <script src="./src/ButtonFactory.js"></script>
+    <!-- Scenes: order matters — base classes before derived, all before main.js -->
     <script src="./src/Scenes/Load.js"></script>
     <script src="./src/Scenes/Platformer.js"></script>
     <script src="./src/Scenes/Level1.js"></script>
     <script src="./src/Scenes/Level2.js"></script>
-    <script src="./src/Scenes/WinScene.js"></script>
-    <script src="./src/Scenes/PauseMenu.js"></script>
-    <script src="./src/Scenes/Settings.js"></script>
+    <script src="./src/Scenes/StartScreen.js"></script>
     <script src="./src/Scenes/Controls.js"></script>
+    <script src="./src/Scenes/Settings.js"></script>
+    <script src="./src/Scenes/PauseMenu.js"></script>
+    <script src="./src/Scenes/WinScene.js"></script>
+    <!-- Main config — must load last since it references scene classes -->
     <script src="./src/main.js"></script>
 </head>
 <body>
     <div id="phaser-game"></div>
-    <span id="description"></span>
 </body>
 </html>
